@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Avatar Chat</title>
+
+  <style>
+    body {
+      background: #fff;
+      color: white;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 0;
+    }
+
+    #avatar {
+      width: 320px;
+      height: 320px;
+      margin: 25px auto 10px;
+      position: relative;
+    }
+
+    #avatar img {
+      position: absolute;
+      width: 100%;
+      left: 0;
+      top: 0;
+      pointer-events: none;
+      transition: opacity 0.09s linear;
+    }
+
+    #emotion {
+      transition: opacity 0.2s ease;
+    }
+
+    #blink {
+      transition: opacity 0.14s ease-out;
+    }
+
+    #controls {
+      margin-top: 10px;
+    }
+
+    #log {
+      width: 90%;
+      height: 220px;
+      margin: 20px auto;
+      background: #222;
+      border-radius: 6px;
+      overflow-y: auto;
+      padding: 10px;
+      text-align: left;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Avatar Chat</h2>
+
+  <div id="avatar">
+    <img id="base" src="assets/face.png" />
+    <img id="emotion" style="opacity:0" />
+    <img id="blink" src="assets/blink.png" style="opacity:0" />
+    <img id="viseme" style="opacity:0" />
+  </div>
+
+  <div id="controls">
+    <input id="text" placeholder="Type..." style="width:260px;height:32px">
+    <button id="send">Send</button>
+  </div>
+
+  <audio id="audioPlayer"></audio>
+
+  <div id="log"></div>
+
+  <script src="src/FaceRig.js"></script>
+  <script src="src/app.js"></script>
+
+</body>
+
+</html>
