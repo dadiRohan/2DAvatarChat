@@ -4,10 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <title>Avatar Chat</title>
-
   <style>
     body {
-      background: #fff;
+      background: #ccc;
       color: white;
       font-family: Arial, sans-serif;
       text-align: center;
@@ -19,6 +18,8 @@
       height: 320px;
       margin: 25px auto 10px;
       position: relative;
+      overflow: hidden;
+      border-radius: 50%;
     }
 
     #avatar img {
@@ -27,15 +28,48 @@
       left: 0;
       top: 0;
       pointer-events: none;
-      transition: opacity 0.09s linear;
+      transition: opacity 0.07s linear;
+    }
+
+    #base {
+      z-index: 1;
     }
 
     #emotion {
-      transition: opacity 0.2s ease;
+      z-index: 2;
+      /* Apply clip-path to hide mouth area */
+      clip-path: polygon(0% 0%,
+          100% 0%,
+          100% 60%,
+          0% 60%,
+          0% 100%,
+          100% 100%,
+          100% 80%,
+          0% 80%);
+      -webkit-clip-path: polygon(0% 0%,
+          100% 0%,
+          100% 60%,
+          0% 60%,
+          0% 100%,
+          100% 100%,
+          100% 80%,
+          0% 80%);
+    }
+
+    #viseme {
+      z-index: 10 !important;
+      /* Force on top */
+      opacity: 0;
+    }
+
+    /* When speaking, reduce emotion opacity */
+    .speaking #emotion {
+      opacity: 0.8;
     }
 
     #blink {
-      transition: opacity 0.14s ease-out;
+      z-index: 11;
+      transition: opacity 0.1s ease-out;
     }
 
     #controls {
@@ -56,14 +90,20 @@
 </head>
 
 <body>
-
   <h2>Avatar Chat</h2>
 
   <div id="avatar">
+    <!-- BASE FACE -->
     <img id="base" src="assets/face.png" />
+
+    <!-- EMOTION LAYER (BEHIND MOUTH) -->
     <img id="emotion" style="opacity:0" />
-    <img id="blink" src="assets/blink.png" style="opacity:0" />
+
+    <!-- VISEME MOUTH (ON TOP OF EMOTION) -->
     <img id="viseme" style="opacity:0" />
+
+    <!-- BLINK (TOP MOST ALWAYS) -->
+    <img id="blink" src="assets/blink.png" style="opacity:0" />
   </div>
 
   <div id="controls">
@@ -77,7 +117,6 @@
 
   <script src="src/FaceRig.js"></script>
   <script src="src/app.js"></script>
-
 </body>
 
 </html>
