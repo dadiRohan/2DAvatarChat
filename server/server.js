@@ -1,19 +1,6 @@
 /**
- * Full patched server.js
- * - Uses Gentle forced-aligner to get phoneme timings from the TTS WAV
- * - Maps phonemes -> visemes and broadcasts accurate viseme timeline
- * - Falls back to heuristic timeline if aligner fails
- *
- * Requirements:
- * npm i express cors ws node-fetch form-data say wav-file-info dotenv
- *
- * Start Gentle (recommended via Docker):
- * docker run -d -p 8765:8765 lowerquality/gentle:latest
- *
- * Put your .env if you want to override endpoints:
- * GENTLE_URL, OLLAMA_URL
+ * Enhanced server.js with better viseme timing and synchronization
  */
-
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -41,126 +28,317 @@ const WS_PORT = process.env.WS_PORT ? Number(process.env.WS_PORT) : 8080;
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434/v1/chat/completions";
 const GENTLE_URL = process.env.GENTLE_URL || "http://localhost:8765/transcriptions?async=false";
 
-// ---------------------------
-// Phoneme -> Viseme mapping
-// ARPAbet-ish phonemes mapped to your viseme PNG names
-// ---------------------------
+// Enhanced Phoneme -> Viseme mapping
 const PHONEME_TO_VISEME = {
-  // vowels
-  "AA": "A", "AE": "A", "AH": "A", "AO": "O", "AW": "O", "AY": "A",
-  // bilabials
-  "B": "M", "P": "M", "M": "M",
-  // labiodental
-  "F": "FV", "V": "FV",
-  // L
-  "L": "L",
-  // sibilants & affricates -> E-ish (smile)
-  "S": "E", "Z": "E", "SH": "E", "CH": "E", "JH": "E", "ZH": "E",
-  // front vowels
-  "IY": "E", "IH": "E", "EY": "E",
-  // back vowels
+  // SILENCE/REST
+  "SIL": "rest", "SPN": "rest", "CLOSURE": "rest",
+
+  // Vowels - Open mouth
+  "AA": "A", "AE": "A", "AH": "A", "AO": "O", "AW": "O",
+  "AY": "A", "EH": "E", "ER": "A", "EY": "E",
+
+  // Front vowels/smile
+  "IY": "E", "IH": "E", "Y": "E",
+
+  // Back vowels - Round
   "OW": "O", "UH": "O", "UW": "O",
-  // th/dh
+
+  // Bilabials - Closed lips
+  "B": "M", "P": "M", "M": "M", "EM": "M",
+
+  // Labiodental
+  "F": "FV", "V": "FV",
+
+  // L sounds
+  "L": "L", "EL": "L",
+
+  // Sibilants
+  "S": "E", "Z": "E", "SH": "E", "ZH": "E",
+
+  // Affricates
+  "CH": "E", "JH": "E",
+
+  // Dental
   "TH": "E", "DH": "E",
-  // r/n/t/d/k/g etc -> map to neutral open/closed approximations
-  "R": "O",
-  "N": "M", "T": "M", "D": "M", "K": "A", "G": "A",
-  // fallback
+
+  // Nasals
+  "N": "M", "NG": "M", "EN": "M",
+
+  // Plosives
+  "T": "M", "D": "M", "K": "A", "G": "A",
+
+  // Approximants
+  "R": "O", "W": "O", "WH": "O",
+
+  // Default
+  "DEFAULT": "A"
 };
 
-// ---------------------------
-// Utilities: text -> heur viseme seq (fallback)
-// ---------------------------
-function charToViseme(ch) {
-  ch = (ch || "").toLowerCase();
-  if ("aeiou".includes(ch)) return "A";
-  if ("bdpv".includes(ch)) return "M";
-  if ("fvw".includes(ch)) return "FV";
-  if ("l".includes(ch)) return "L";
-  if ("szcjx".includes(ch)) return "E";
-  if ("o".includes(ch)) return "O";
-  return "A";
+// Enhanced text cleaning for better phoneme alignment
+function cleanTextForTTS(text) {
+  return text
+    .replace(/[^\w\s.,!?;:'"-]/g, '') // Remove special characters
+    .replace(/\s+/g, ' ')            // Normalize whitespace
+    .trim();
 }
 
-function charToPhoneme(ch) {
-  ch = ch.toLowerCase();
-  if ("a".includes(ch)) return "AA";
-  if ("e".includes(ch)) return "EH";
-  if ("i".includes(ch)) return "IY";
-  if ("o".includes(ch)) return "OW";
-  if ("u".includes(ch)) return "UH";
+// Enhanced forced aligner with better error handling
+async function runForcedAligner(wavFilePath, transcript) {
+  try {
+    if (!fs.existsSync(wavFilePath)) {
+      console.warn("runForcedAligner: wav file missing:", wavFilePath);
+      return null;
+    }
 
-  if ("pbm".includes(ch)) return "M";
-  if ("fv".includes(ch)) return "FV";
-  if ("l".includes(ch)) return "L";
+    const form = new FormData();
+    form.append("audio", fs.createReadStream(wavFilePath));
+    form.append("transcript", transcript);
 
-  if ("szcjx".includes(ch)) return "S";
-  if ("tdnrkg".includes(ch)) return "T";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-  return "AA"; // default vowelish neutral
-}
-
-function phonemeToViseme(ph) {
-  if (["AA", "AE", "AH", "AY"].includes(ph)) return "A";
-  if (["EH", "EE", "IY", "IH", "S", "T"].includes(ph)) return "E";
-  if (["OW", "OO", "UH", "UW"].includes(ph)) return "O";
-  if (["M"].includes(ph)) return "M";
-  if (["FV"].includes(ph)) return "FV";
-  if (["L"].includes(ph)) return "L";
-
-  return "A";
-}
-
-function textToVisemeSequence(text) {
-  const seq = [];
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (!/[a-z]/i.test(ch)) continue;
-
-    const phoneme = charToPhoneme(ch);
-    const vis = phonemeToViseme(phoneme);
-
-    if (seq.length === 0 || seq[seq.length - 1] !== vis)
-      seq.push(vis);
-  }
-
-  return seq;
-}
-
-function buildVisemeTimeline(visemes, duration) {
-  if (visemes.length === 0) return [];
-
-  // more natural lip movement distribution
-  const timeline = [];
-  const avg = duration / visemes.length;
-
-  let cursor = 0;
-
-  for (let i = 0; i < visemes.length; i++) {
-    const hold = avg * (0.9 + Math.random() * 0.3);  // slight randomness
-    const start = cursor;
-    const end = Math.min(duration, cursor + hold);
-
-    timeline.push({
-      viseme: visemes[i],
-      start: Number(start.toFixed(3)),
-      end: Number(end.toFixed(3))
+    const res = await fetch(GENTLE_URL, {
+      method: "POST",
+      body: form,
+      headers: form.getHeaders(),
+      signal: controller.signal
     });
 
-    cursor = end;
-  }
+    clearTimeout(timeout);
 
-  // ensure last matches audio
-  timeline[timeline.length - 1].end = Number(duration.toFixed(3));
-  return timeline;
+    if (!res.ok) {
+      console.warn("Gentle HTTP error:", res.status, await res.text());
+      return null;
+    }
+
+    const json = await res.json();
+
+    const phones = [];
+    if (json && Array.isArray(json.words)) {
+      let currentTime = 0;
+
+      for (const w of json.words) {
+        if (w.case === "not-found-in-audio" || !w.alignedWord) {
+          // Add default phoneme for non-aligned words
+          const defaultPhone = {
+            phoneme: "SIL",
+            start: currentTime,
+            end: currentTime + 0.1,
+            confidence: 0
+          };
+          phones.push(defaultPhone);
+          currentTime += 0.1;
+          continue;
+        }
+
+        if (Array.isArray(w.phones)) {
+          for (const p of w.phones) {
+            if (!p.phone) continue;
+
+            let phone = String(p.phone).replace(/\d/g, "").toUpperCase();
+            const start = (typeof p.start === "number") ? p.start :
+              (typeof w.start === "number" ? w.start : currentTime);
+            const dur = (typeof p.duration === "number") ? p.duration : 0.05;
+            const end = start + dur;
+            const confidence = p.score || 1.0;
+
+            phones.push({
+              phoneme: phone,
+              start: Number(start.toFixed(3)),
+              end: Number(end.toFixed(3)),
+              confidence: confidence
+            });
+
+            currentTime = end;
+          }
+        } else {
+          // Fallback for words without phone breakdown
+          const start = w.start || currentTime;
+          const end = w.end || start + 0.1;
+          const wordPhoneme = w.word ? guessPhonemeFromWord(w.word) : "SIL";
+
+          phones.push({
+            phoneme: wordPhoneme,
+            start: Number(start.toFixed(3)),
+            end: Number(end.toFixed(3)),
+            confidence: 0.5
+          });
+
+          currentTime = end;
+        }
+      }
+    }
+
+    return phones.length > 0 ? phones : null;
+  } catch (err) {
+    console.error("runForcedAligner exception:", err);
+    return null;
+  }
 }
 
+function guessPhonemeFromWord(word) {
+  const firstChar = word.charAt(0).toUpperCase();
+  if ("AEIOU".includes(firstChar)) return "AA";
+  if ("BPM".includes(firstChar)) return "M";
+  if ("FVCK".includes(firstChar)) return "FV";
+  if ("SZ".includes(firstChar)) return "S";
+  if ("L".includes(firstChar)) return "L";
+  return "AA";
+}
 
-// ---------------------------
-// Call Ollama (same as before) — returns parsed { reply, emotion }
-// The function is tolerant to Ollama returning a JSON blob inside a ```json code fence.
-// ---------------------------
+// Enhanced phoneme smoothing and merging
+function smoothPhonemeTimeline(phones, mergeThreshold = 0.03) {
+  if (!phones || phones.length === 0) return phones;
+
+  const smoothed = [];
+  let current = { ...phones[0] };
+
+  for (let i = 1; i < phones.length; i++) {
+    const next = phones[i];
+
+    // Merge if same phoneme and close together
+    if (current.phoneme === next.phoneme &&
+      (next.start - current.end) < mergeThreshold) {
+      current.end = next.end;
+      current.confidence = Math.max(current.confidence || 0.5, next.confidence || 0.5);
+    } else {
+      smoothed.push(current);
+      current = { ...next };
+    }
+  }
+
+  smoothed.push(current);
+  return smoothed;
+}
+
+// Enhanced phoneme to viseme conversion
+function phonemesToVisemesEnhanced(phones) {
+  const visemes = [];
+
+  // Add initial rest state
+  if (phones.length > 0 && phones[0].start > 0) {
+    visemes.push({
+      viseme: "rest",
+      start: 0,
+      end: phones[0].start,
+      confidence: 1.0
+    });
+  }
+
+  for (let i = 0; i < phones.length; i++) {
+    const phone = phones[i];
+    const viseme = PHONEME_TO_VISEME[phone.phoneme] || PHONEME_TO_VISEME["DEFAULT"];
+
+    // Determine if this should be a hold or transition
+    const duration = phone.end - phone.start;
+    const confidence = phone.confidence || 0.5;
+
+    // For very short phonemes, combine with neighbors
+    if (duration < 0.05 && i > 0 && i < phones.length - 1) {
+      const prevViseme = PHONEME_TO_VISEME[phones[i - 1].phoneme] || "A";
+      const nextViseme = PHONEME_TO_VISEME[phones[i + 1].phoneme] || "A";
+
+      // Skip if sandwiched between same visemes
+      if (prevViseme === nextViseme) {
+        continue;
+      }
+    }
+
+    visemes.push({
+      viseme: viseme,
+      start: phone.start,
+      end: phone.end,
+      confidence: confidence
+    });
+  }
+
+  // Add final rest state
+  if (visemes.length > 0) {
+    const lastViseme = visemes[visemes.length - 1];
+    if (lastViseme.end < phones[phones.length - 1].end) {
+      visemes.push({
+        viseme: "rest",
+        start: lastViseme.end,
+        end: phones[phones.length - 1].end,
+        confidence: 1.0
+      });
+    }
+  }
+
+  return visemes;
+}
+
+// Generate fallback viseme timeline with better timing
+function generateFallbackVisemes(text, duration) {
+  const words = text.toLowerCase().split(/\s+/);
+  const visemeSequence = [];
+  let timeCursor = 0;
+  const wordDuration = duration / Math.max(words.length, 1);
+
+  for (const word of words) {
+    const wordStart = timeCursor;
+    const wordEnd = timeCursor + wordDuration;
+
+    // Generate visemes for each character in the word
+    let charTime = wordStart;
+    const charDuration = wordDuration / Math.max(word.length, 1);
+
+    for (let i = 0; i < word.length; i++) {
+      const char = word[i];
+      const viseme = charToVisemeEnhanced(char);
+
+      if (visemeSequence.length === 0 || visemeSequence[visemeSequence.length - 1].viseme !== viseme) {
+        const visemeStart = charTime;
+        const visemeEnd = Math.min(wordEnd, charTime + charDuration);
+
+        visemeSequence.push({
+          viseme: viseme,
+          start: Number(visemeStart.toFixed(3)),
+          end: Number(visemeEnd.toFixed(3))
+        });
+      }
+
+      charTime += charDuration;
+    }
+
+    // Add pause between words
+    if (word !== words[words.length - 1]) {
+      visemeSequence.push({
+        viseme: "rest",
+        start: charTime,
+        end: charTime + 0.05
+      });
+      timeCursor = charTime + 0.05;
+    } else {
+      timeCursor = wordEnd;
+    }
+  }
+
+  // Ensure timeline matches total duration
+  if (visemeSequence.length > 0) {
+    visemeSequence[visemeSequence.length - 1].end = Number(duration.toFixed(3));
+  }
+
+  return visemeSequence;
+}
+
+function charToVisemeEnhanced(ch) {
+  ch = (ch || "").toLowerCase();
+  if ("aeiou".includes(ch)) return "A";
+  if ("bp".includes(ch)) return "M";
+  if ("m".includes(ch)) return "M";
+  if ("fv".includes(ch)) return "FV";
+  if ("l".includes(ch)) return "L";
+  if ("sz".includes(ch)) return "E";
+  if ("ckg".includes(ch)) return "A";
+  if ("o".includes(ch)) return "O";
+  if ("w".includes(ch)) return "O";
+  if ("tdnr".includes(ch)) return "M";
+  if ("h".includes(ch)) return "A";
+  return "rest";
+}
+
+// Call Ollama (unchanged)
 async function callOllama(userText) {
   const prompt = [
     { role: "system", content: "You are a concise chatbot. Return ONLY valid JSON with keys reply and emotion (emotion one of: neutral, happy, sad, angry, surprised)." },
@@ -181,14 +359,12 @@ async function callOllama(userText) {
     else if (j.choices?.[0]?.message?.content) text = j.choices[0].message.content;
     else text = JSON.stringify(j);
 
-    // strip code fences if present
     let cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
     try {
       const parsed = JSON.parse(cleaned);
       return { reply: (parsed.reply || cleaned), emotion: (parsed.emotion || "neutral") };
     } catch (e) {
-      // fallback - treat as a plain reply string
       return { reply: cleaned, emotion: "neutral" };
     }
   } catch (err) {
@@ -197,13 +373,13 @@ async function callOllama(userText) {
   }
 }
 
-// ---------------------------
-// TTS via say.export -> base64
-// ---------------------------
+// TTS via say.export
 async function ttsToWavBase64(text) {
+  const cleanedText = cleanTextForTTS(text);
   const tmpPath = path.join(".", `tmp_tts_${Date.now()}.wav`);
+
   return new Promise((resolve, reject) => {
-    say.export(text, null, 1.0, tmpPath, async (err) => {
+    say.export(cleanedText, null, 1.0, tmpPath, async (err) => {
       if (err) return reject(err);
       try {
         const buf = fs.readFileSync(tmpPath);
@@ -216,92 +392,40 @@ async function ttsToWavBase64(text) {
   });
 }
 
-// ---------------------------
-// Gentle aligner call (multipart/form-data)
-// Returns phones: [{ phoneme, start, end }, ...] OR null on failure
-// ---------------------------
-async function runForcedAligner(wavFilePath, transcript) {
+// Get audio duration
+async function getAudioDuration(wavBase64) {
   try {
-    if (!fs.existsSync(wavFilePath)) {
-      console.warn("runForcedAligner: wav file missing:", wavFilePath);
-      return null;
+    const probeFile = path.join(".", `tmp_probe_${Date.now()}.wav`);
+    fs.writeFileSync(probeFile, Buffer.from(wavBase64, "base64"));
+    const info = await readWavInfo(probeFile);
+    fs.unlinkSync(probeFile);
+
+    if (info && info.header && info.data && info.data.dataChunkSize) {
+      const sampleRate = Number(info.header.sampleRate) || 22050;
+      const bits = Number(info.header.bitsPerSample) || 16;
+      const channels = Number(info.header.numChannels) || 1;
+      const bytesPerSample = bits / 8 || 2;
+      const totalSamples = info.data.dataChunkSize / (bytesPerSample * channels);
+      return totalSamples / sampleRate;
     }
-
-    const form = new FormData();
-    form.append("audio", fs.createReadStream(wavFilePath));
-    form.append("transcript", transcript);
-
-    const res = await fetch(GENTLE_URL, {
-      method: "POST",
-      body: form,
-      headers: form.getHeaders()
-    });
-
-    if (!res.ok) {
-      console.warn("Gentle HTTP error:", res.status, await res.text());
-      return null;
-    }
-
-    const json = await res.json();
-
-    // Gentle structure: json.words -> alignedWord.phones { phone, duration, start }
-    const phones = [];
-    if (json && Array.isArray(json.words)) {
-      for (const w of json.words) {
-        if (!w.alignedWord || !Array.isArray(w.alignedWord.phones)) continue;
-        for (const p of w.alignedWord.phones) {
-          if (!p.phone) continue;
-          let phone = String(p.phone).replace(/\d/g, "").toUpperCase();
-          // Gentle phone objects commonly include start & duration
-          const start = (typeof p.start === "number") ? p.start : (typeof w.start === "number" ? w.start : 0);
-          const dur = (typeof p.duration === "number") ? p.duration : ((typeof w.end === "number" && typeof w.start === "number") ? (w.end - w.start) : 0.05);
-          const end = start + dur;
-          phones.push({ phoneme: phone, start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) });
-        }
-      }
-    }
-
-    if (!phones.length) return null;
-    return phones;
   } catch (err) {
-    console.error("runForcedAligner exception:", err);
-    return null;
+    console.warn("Failed to get audio duration:", err);
   }
+  return 1.0;
 }
 
-// ---------------------------
-// Convert phoneme timeline -> viseme timeline (merge nearby same visemes)
-// ---------------------------
-function phonemesToVisemes(phones) {
-  const vis = [];
-  for (const p of phones) {
-    const viseme = (PHONEME_TO_VISEME[p.phoneme] || "A");
-    const last = vis.length ? vis[vis.length - 1] : null;
-    // merge if same viseme and gap tiny
-    if (last && last.viseme === viseme && Math.abs(last.end - p.start) < 0.035) {
-      last.end = p.end;
-    } else {
-      vis.push({ viseme, start: Number(p.start.toFixed(3)), end: Number(p.end.toFixed(3)) });
-    }
-  }
-  return vis;
-}
-
-// ---------------------------
 // HTTP /chat endpoint
-// ---------------------------
 app.post("/chat", async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: "text required" });
 
   try {
-    // 1) generate model reply + emotion
+    // 1) Generate model reply + emotion
     const parsed = await callOllama(text);
-    // parsed.reply is cleaned string (not raw fenced JSON)
     let reply = (parsed.reply || "").toString();
     const emotion = parsed.emotion || "neutral";
 
-    // 2) produce TTS WAV (base64) of CLEAN reply
+    // 2) Produce TTS WAV
     let audioBase64 = null;
     try {
       audioBase64 = await ttsToWavBase64(reply);
@@ -310,77 +434,80 @@ app.post("/chat", async (req, res) => {
       audioBase64 = null;
     }
 
-    // 3) determine WAV duration if we have audio
+    // 3) Get audio duration
     let durationSeconds = 1.0;
     if (audioBase64) {
-      const probeFile = path.join(".", `tmp_probe_${Date.now()}.wav`);
-      try {
-        fs.writeFileSync(probeFile, Buffer.from(audioBase64, "base64"));
-        const info = await readWavInfo(probeFile);
-        if (info && info.header && info.data && info.data.dataChunkSize) {
-          const sampleRate = Number(info.header.sampleRate) || 44100;
-          const bits = Number(info.header.bitsPerSample) || 16;
-          const channels = Number(info.header.numChannels) || 1;
-          const bytesPerSample = bits / 8 || 2;
-          const totalSamples = info.data.dataChunkSize / (bytesPerSample * channels);
-          durationSeconds = totalSamples / sampleRate;
-        }
-      } catch (err) {
-        console.warn("Failed to probe WAV duration:", err);
-      } finally {
-        try { fs.unlinkSync(probeFile); } catch (e) { }
-      }
+      durationSeconds = await getAudioDuration(audioBase64);
     }
 
-    // 4) Attempt forced alignment using Gentle (best) -> build viseme timeline
+    // 4) Attempt forced alignment
     let visemeTimeline = [];
+    let alignmentSource = "fallback";
 
     if (audioBase64) {
-      // write temp wav for Gentle
       const alignTmp = path.join(".", `tmp_align_${Date.now()}.wav`);
       try {
         fs.writeFileSync(alignTmp, Buffer.from(audioBase64, "base64"));
 
-        // run Gentle
         const phones = await runForcedAligner(alignTmp, reply);
 
         if (phones && phones.length) {
-          visemeTimeline = phonemesToVisemes(phones);
-          console.log("Viseme timeline (from Gentle) length:", visemeTimeline.length);
+          const smoothedPhones = smoothPhonemeTimeline(phones);
+          visemeTimeline = phonemesToVisemesEnhanced(smoothedPhones);
+          alignmentSource = "gentle";
+          console.log(`Gentle alignment successful: ${visemeTimeline.length} visemes`);
         } else {
-          // fallback heuristic
-          const seq = textToVisemeSequence(reply);
-          visemeTimeline = buildVisemeTimeline(seq, durationSeconds);
-          console.warn("Gentle failed or returned no phones -> used heuristic viseme timeline");
+          visemeTimeline = generateFallbackVisemes(reply, durationSeconds);
+          console.warn("Gentle failed -> used enhanced fallback viseme timeline");
         }
       } catch (err) {
         console.error("Aligner pipeline error:", err);
-        const seq = textToVisemeSequence(reply);
-        visemeTimeline = buildVisemeTimeline(seq, durationSeconds);
+        visemeTimeline = generateFallbackVisemes(reply, durationSeconds);
       } finally {
         try { fs.unlinkSync(alignTmp); } catch (e) { }
       }
     } else {
-      // no audio, fallback heuristic using estimated durationSeconds
-      const seq = textToVisemeSequence(reply);
-      visemeTimeline = buildVisemeTimeline(seq, durationSeconds);
+      visemeTimeline = generateFallbackVisemes(reply, durationSeconds);
     }
 
-    // 5) Respond immediately to HTTP client with basic info
-    res.json({ status: "ok", reply, emotion, visemes: visemeTimeline, audio: audioBase64 });
+    // 5) Ensure timeline has at least one entry
+    if (visemeTimeline.length === 0) {
+      visemeTimeline = [{
+        viseme: "rest",
+        start: 0,
+        end: Math.max(durationSeconds, 0.1)
+      }];
+    }
 
-    // 6) Broadcast via WebSocket to all connected clients
-    const payload = { type: "tts", reply, emotion, visemes: visemeTimeline, audio: audioBase64 };
-    broadcastWS(JSON.stringify(payload));
+    // 6) Add metadata
+    const responsePayload = {
+      status: "ok",
+      reply,
+      emotion,
+      visemes: visemeTimeline,
+      audio: audioBase64,
+      duration: durationSeconds,
+      alignmentSource: alignmentSource,
+      timestamp: Date.now()
+    };
+
+    res.json(responsePayload);
+
+    // 7) Broadcast via WebSocket
+    const wsPayload = {
+      type: "tts",
+      ...responsePayload,
+      audio: audioBase64 // Keep audio in WS for real-time playback
+    };
+    broadcastWS(JSON.stringify(wsPayload));
+
   } catch (err) {
     console.error("Chat endpoint error:", err);
     res.status(500).json({ status: "error", error: String(err) });
   }
 });
 
-// ---------------------------
 // WebSocket server
-// ---------------------------
 const wss = new WebSocketServer({ port: WS_PORT });
 
 function broadcastWS(msg) {
@@ -391,13 +518,16 @@ function broadcastWS(msg) {
 
 wss.on("connection", (ws) => {
   console.log("WS client connected");
-  ws.send(JSON.stringify({ type: "info", msg: "connected" }));
+  ws.send(JSON.stringify({
+    type: "info",
+    msg: "connected",
+    timestamp: Date.now()
+  }));
 });
 
-// ---------------------------
 // Start HTTP server
-// ---------------------------
 app.listen(HTTP_PORT, () => {
   console.log(`HTTP server running at http://localhost:${HTTP_PORT}`);
   console.log(`WebSocket server running at ws://localhost:${WS_PORT}`);
+  console.log(`Gentle aligner URL: ${GENTLE_URL}`);
 });
