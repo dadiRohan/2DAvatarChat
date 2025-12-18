@@ -1,0 +1,24 @@
+{
+    "name": "simple-chatbot-server",
+    "version": "1.0.0",
+    "description": "Server for simple-chatbot",
+    "type": "module",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node --watch server.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^16.6.1",
+        "express": "^4.22.1",
+        "form-data": "^4.0.5",
+        "node-fetch": "^3.3.2",
+        "say": "^0.16.0",
+        "wav-file-info": "^0.0.10",
+        "ws": "^8.18.3"
+    }
+}
