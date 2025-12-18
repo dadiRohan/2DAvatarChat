@@ -62,7 +62,8 @@ function sendMessage() {
   const txt = document.getElementById("text").value.trim();
   if (!txt) return;
 
-  fetch("http://localhost:3000/chat", {
+  // fetch("http://localhost:3000/chat", {
+  fetch("https://twodavatarchat-xe6t.onrender.com/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: txt })
