@@ -3,117 +3,61 @@
 
 <head>
   <meta charset="UTF-8" />
-  <title>Avatar Chat</title>
-  <style>
-    body {
-      background: #ccc;
-      color: white;
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin: 0;
-    }
-
-    #avatar {
-      width: 320px;
-      height: 320px;
-      margin: 25px auto 10px;
-      position: relative;
-      overflow: hidden;
-      border-radius: 50%;
-    }
-
-    #avatar img {
-      position: absolute;
-      width: 100%;
-      left: 0;
-      top: 0;
-      pointer-events: none;
-      transition: opacity 0.07s linear;
-    }
-
-    #base {
-      z-index: 1;
-    }
-
-    #emotion {
-      z-index: 2;
-      /* Apply clip-path to hide mouth area */
-      clip-path: polygon(0% 0%,
-          100% 0%,
-          100% 60%,
-          0% 60%,
-          0% 100%,
-          100% 100%,
-          100% 80%,
-          0% 80%);
-      -webkit-clip-path: polygon(0% 0%,
-          100% 0%,
-          100% 60%,
-          0% 60%,
-          0% 100%,
-          100% 100%,
-          100% 80%,
-          0% 80%);
-    }
-
-    #viseme {
-      z-index: 10 !important;
-      /* Force on top */
-      opacity: 0;
-    }
-
-    /* When speaking, reduce emotion opacity */
-    .speaking #emotion {
-      opacity: 0.8;
-    }
-
-    #blink {
-      z-index: 11;
-      transition: opacity 0.1s ease-out;
-    }
-
-    #controls {
-      margin-top: 10px;
-    }
-
-    #log {
-      width: 90%;
-      height: 220px;
-      margin: 20px auto;
-      background: #222;
-      border-radius: 6px;
-      overflow-y: auto;
-      padding: 10px;
-      text-align: left;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Companion</title>
+  <link rel="stylesheet" href="src/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 
 <body>
-  <h2>Avatar Chat</h2>
+  <div class="app-container">
+    <header>
+      <div class="status-indicator">
+        <span class="status-dot"></span>
+        <span id="status-text">Ready</span>
+      </div>
+      <h2>AI Companion</h2>
+    </header>
 
-  <div id="avatar">
-    <!-- BASE FACE -->
-    <img id="base" src="assets/face.png" />
+    <main>
+      <div class="avatar-section">
+        <div id="avatar">
+          <!-- BASE FACE -->
+          <img id="base" src="assets/face.png" alt="Avatar Base" />
 
-    <!-- EMOTION LAYER (BEHIND MOUTH) -->
-    <img id="emotion" style="opacity:0" />
+          <!-- EMOTION LAYER -->
+          <img id="emotion" style="opacity:0" alt="Avatar Emotion" />
 
-    <!-- VISEME MOUTH (ON TOP OF EMOTION) -->
-    <img id="viseme" style="opacity:0" />
+          <!-- VISEME MOUTH -->
+          <img id="viseme" style="opacity:0" alt="Avatar Mouth" />
 
-    <!-- BLINK (TOP MOST ALWAYS) -->
-    <img id="blink" src="assets/blink.png" style="opacity:0" />
-  </div>
+          <!-- BLINK -->
+          <img id="blink" src="assets/blink.png" style="opacity:0" alt="Avatar Blink" />
+        </div>
+      </div>
 
-  <div id="controls">
-    <input id="text" placeholder="Type..." style="width:260px;height:32px">
-    <button id="send">Send</button>
+      <div class="chat-section">
+        <div id="log" class="chat-log">
+          <div class="welcome-message">Hello! I'm listening.</div>
+        </div>
+
+        <div class="controls-area">
+          <div class="input-wrapper">
+            <input id="text" type="text" placeholder="Type a message..." autocomplete="off">
+            <button id="send">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <audio id="audioPlayer"></audio>
-
-  <div id="log"></div>
 
   <script src="src/FaceRig.js"></script>
   <script src="src/app.js"></script>
